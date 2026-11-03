@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+/data/*.csv
+/data/*.dvc
+/data/.gitignore
+/.dvc/
+/.dvcignore

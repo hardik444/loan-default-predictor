@@ -1,0 +1,6 @@
+risk_tier,borrowers,actual_default_rate,avg_predicted
+Very low,52256,0.0899,0.0925
+Low,52255,0.1402,0.1334
+Medium,52256,0.1762,0.1755
+High,52255,0.2351,0.2374
+Very high,52256,0.3632,0.3651
