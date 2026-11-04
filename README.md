@@ -264,12 +264,18 @@ python -m src.predict        # score an example borrower
 streamlit run app.py         # open the web app (score a borrower, view metrics and SHAP)
 ```
 
+**Deploy the Streamlit app:** deploy this GitHub repository on
+[Streamlit Community Cloud](https://share.streamlit.io/), select branch `main`
+and entrypoint `app.py`. The trained model is included in the repository. Do not
+deploy this Streamlit entrypoint to Vercel; Vercel expects a serverless Python
+handler and does not run Streamlit's persistent app server.
+
 If neither data file is present, the pipeline falls back to a built-in synthetic dataset (20,000 loans, about 12% defaults) so everything still runs.
 
 **Canonical CSV format:**
 `fico, annual_income, loan_amount, term_months, emp_years, open_accounts, credit_history_years, purpose, home_ownership, dti, default` (`default` = 1 means the loan defaulted; `fico` can be absent for Experiment A).
 
-> The raw datasets and trained model file (`models/loan_model.joblib`) are not stored in the repository. Re-create them with the commands above.
+> The raw datasets are not stored in the repository. The trained model file (`models/loan_model.joblib`) is included so the deployed app can score borrowers without access to the training data.
 
 ## Project structure
 
@@ -286,7 +292,7 @@ loan-default-predictor/
 │   ├── train.py                  # CV, calibration, threshold, evaluation, SHAP
 │   └── predict.py                # score a single borrower
 ├── data/                         # not tracked
-├── models/                       # config tracked; generated model file ignored
+├── models/                       # trained model and config
 ├── reports/                      # latest run
 │   └── cost_ratio_comparison.csv
 ```
