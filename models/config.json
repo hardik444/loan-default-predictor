@@ -1,5 +1,12 @@
 {
   "model": "XGBoost",
-  "threshold": 0.09266948236646372,
-  "fico_edges": null
+  "threshold": 0.08525568704324027,
+  "fico_edges": [
+    669,
+    689,
+    709,
+    729,
+    769,
+    849
+  ]
 }

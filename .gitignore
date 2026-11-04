@@ -4,5 +4,6 @@ __pycache__/
 /data/*.csv
 /data/*.dvc
 /data/.gitignore
+/models/*.joblib
 /.dvc/
 /.dvcignore

@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SEED = 42
 COST_FN = 10.0
 COST_FP = 1.0
+COST_RATIOS = (2.0, 3.0, 5.0, 10.0)
 N_SPLITS = 5
 N_REPEATS = 3
 N_BOOTSTRAPS = 1000
@@ -186,9 +187,13 @@ def main():
     fitted = {}
     thresholds_by_model = {}
     cost_curves = {}
+    oof_scores_by_model = {}
+    test_scores_by_model = {}
     for name, pipe in candidates.items():
         print(f"\nRepeated stratified CV: {name}")
         repeated_oof = np.full((n_repeats, len(development_raw)), np.nan)
+        fold_roc_auc = []
+        fold_pr_auc = []
         for repeat, train_idx, valid_idx in fold_splits:
             fold_train = development_raw.iloc[train_idx]
             fold_valid = development_raw.iloc[valid_idx]
@@ -204,20 +209,17 @@ def main():
                 pipe, train_features[features], fold_y,
                 calibration_folds=calibration_folds,
             )
-            repeated_oof[repeat, valid_idx] = model.predict_proba(
-                valid_features[features]
-            )[:, 1]
+            fold_scores = model.predict_proba(valid_features[features])[:, 1]
+            repeated_oof[repeat, valid_idx] = fold_scores
+            valid_y = y_dev[valid_idx]
+            fold_roc_auc.append(roc_auc_score(valid_y, fold_scores))
+            fold_pr_auc.append(average_precision_score(valid_y, fold_scores))
 
         if not np.isfinite(repeated_oof).all():
             raise RuntimeError(f"Repeated CV did not produce all OOF scores for {name}.")
         oof_scores = repeated_oof.mean(axis=0)
-        cv_auc = np.array([
-            roc_auc_score(y_dev, repeat_scores) for repeat_scores in repeated_oof
-        ])
-        cv_pr_auc = np.array([
-            average_precision_score(y_dev, repeat_scores)
-            for repeat_scores in repeated_oof
-        ])
+        cv_auc = np.asarray(fold_roc_auc)
+        cv_pr_auc = np.asarray(fold_pr_auc)
         threshold, curve_thresholds, curve_costs = best_threshold(y_dev, oof_scores)
 
         final_model = _fit_calibrated(
@@ -225,6 +227,8 @@ def main():
         )
         fitted[name] = final_model
         test_scores = final_model.predict_proba(X_test)[:, 1]
+        oof_scores_by_model[name] = oof_scores
+        test_scores_by_model[name] = test_scores
         predicted_default = test_scores >= threshold
         roc_low, roc_high = _bootstrap_ci(
             y_test, test_scores, roc_auc_score, SEED,
@@ -236,6 +240,7 @@ def main():
         )
         rows.append({
             "model": name,
+            "cv_fold_count": len(cv_auc),
             "cv_roc_auc_mean": cv_auc.mean(),
             "cv_roc_auc_std": cv_auc.std(ddof=1),
             "cv_pr_auc_mean": cv_pr_auc.mean(),
@@ -259,26 +264,48 @@ def main():
         thresholds_by_model[name] = threshold
         cost_curves[name] = (curve_thresholds, curve_costs)
 
+    test_nondefault_count = int((y_test == 0).sum())
     approve_all_cost = COST_FN * test_default_count
-    rows.append({
-        "model": "Approve everyone / no-skill PR baseline",
+    reject_all_cost = COST_FP * test_nondefault_count
+    rows.extend([{
+        "model": "Approve everyone",
+        "cv_fold_count": np.nan,
         "cv_roc_auc_mean": np.nan,
         "cv_roc_auc_std": np.nan,
-        "cv_pr_auc_mean": float(y_dev.mean()),
+        "cv_pr_auc_mean": np.nan,
         "cv_pr_auc_std": np.nan,
         "roc_auc": np.nan,
         "roc_auc_ci_lower": np.nan,
         "roc_auc_ci_upper": np.nan,
-        "pr_auc": float(y_test.mean()),
+        "pr_auc": np.nan,
+        "pr_auc_ci_lower": np.nan,
+        "pr_auc_ci_upper": np.nan,
+        "threshold": np.nan,
+        "precision": 0.0,
+        "recall": 0.0,
+        "defaults_caught": 0,
+        "false_positives": 0,
+        "total_cost": approve_all_cost,
+    }, {
+        "model": "Reject everyone",
+        "cv_fold_count": np.nan,
+        "cv_roc_auc_mean": np.nan,
+        "cv_roc_auc_std": np.nan,
+        "cv_pr_auc_mean": np.nan,
+        "cv_pr_auc_std": np.nan,
+        "roc_auc": np.nan,
+        "roc_auc_ci_lower": np.nan,
+        "roc_auc_ci_upper": np.nan,
+        "pr_auc": np.nan,
         "pr_auc_ci_lower": np.nan,
         "pr_auc_ci_upper": np.nan,
         "threshold": np.nan,
         "precision": test_default_count / len(y_test),
         "recall": 1.0,
         "defaults_caught": test_default_count,
-        "false_positives": int((y_test == 0).sum()),
-        "total_cost": approve_all_cost,
-    })
+        "false_positives": test_nondefault_count,
+        "total_cost": reject_all_cost,
+    }])
 
     results = pd.DataFrame(rows)
     eligible = results[
@@ -291,7 +318,7 @@ def main():
     ].sort_values("cv_pr_auc_mean", ascending=False).iloc[0]["model"]
     best = fitted[best_name]
     threshold = thresholds_by_model[best_name]
-    p_test = best.predict_proba(X_test)[:, 1]
+    p_test = test_scores_by_model[best_name]
     print("\n=== Repeated CV and held-out test comparison ===")
     print(results.round(4).to_string(index=False))
     print(
@@ -299,10 +326,71 @@ def main():
         f"OOF cost threshold: {threshold:.4f}"
     )
     print(
-        f"Approve-everyone baseline test cost: {approve_all_cost:.0f} "
-        f"({test_default_count} missed defaults × {COST_FN:.0f})"
+        f"Baseline test costs at {COST_FN:.0f}:1 (missed default:false alarm): "
+        f"approve everyone={approve_all_cost:.0f}, reject everyone={reject_all_cost:.0f}"
     )
     results.to_csv(ROOT / "reports" / "model_comparison.csv", index=False)
+    ratio_rows = []
+    for ratio in COST_RATIOS:
+        ratio_baselines = {
+            "Approve everyone": (test_default_count, 0, 0),
+            "Reject everyone": (0, test_nondefault_count, test_default_count),
+        }
+        best_baseline_cost = min(
+            ratio * false_negatives + COST_FP * false_positives
+            for false_negatives, false_positives, _ in ratio_baselines.values()
+        )
+        for strategy, (false_negatives, false_positives, caught) in ratio_baselines.items():
+            ratio_rows.append({
+                "false_negative_to_false_positive_cost_ratio": f"{ratio:g}:1",
+                "strategy": strategy,
+                "threshold": np.nan,
+                "cost_fn": ratio,
+                "cost_fp": COST_FP,
+                "defaults_caught": caught,
+                "false_negatives": false_negatives,
+                "false_positives": false_positives,
+                "precision": (
+                    caught / (caught + false_positives)
+                    if caught + false_positives else 0.0
+                ),
+                "recall": caught / test_default_count,
+                "total_cost": ratio * false_negatives + COST_FP * false_positives,
+                "best_baseline_cost": best_baseline_cost,
+                "cost_savings_vs_best_baseline": 0.0,
+            })
+        for name in candidates:
+            ratio_threshold, _, _ = best_threshold(
+                y_dev,
+                oof_scores_by_model[name],
+                cost_fn=ratio,
+                cost_fp=COST_FP,
+            )
+            predicted = test_scores_by_model[name] >= ratio_threshold
+            caught = int((predicted & (y_test == 1)).sum())
+            false_negatives = test_default_count - caught
+            false_positives = int((predicted & (y_test == 0)).sum())
+            ratio_rows.append({
+                "false_negative_to_false_positive_cost_ratio": f"{ratio:g}:1",
+                "strategy": name,
+                "threshold": ratio_threshold,
+                "cost_fn": ratio,
+                "cost_fp": COST_FP,
+                "defaults_caught": caught,
+                "false_negatives": false_negatives,
+                "false_positives": false_positives,
+                "precision": precision_score(y_test, predicted, zero_division=0),
+                "recall": recall_score(y_test, predicted, zero_division=0),
+                "total_cost": ratio * false_negatives + COST_FP * false_positives,
+                "best_baseline_cost": best_baseline_cost,
+                "cost_savings_vs_best_baseline": (
+                    best_baseline_cost
+                    - (ratio * false_negatives + COST_FP * false_positives)
+                ),
+            })
+    pd.DataFrame(ratio_rows).to_csv(
+        ROOT / "reports" / "cost_ratio_comparison.csv", index=False
+    )
     joblib.dump({
         "model": best,
         "edges": edges,

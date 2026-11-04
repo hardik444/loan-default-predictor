@@ -61,11 +61,21 @@ with tab2:
     st.subheader("Cross-validation and held-out test performance")
     st.caption(
         "The model is selected by repeated-CV PR-AUC; test ROC-AUC and PR-AUC "
-        "include stratified-bootstrap 95% confidence intervals. Compare total "
-        "cost and defaults caught with the approve-everyone baseline. Results "
-        "are uncertain when the test set has few defaults."
+        "include stratified-bootstrap 95% confidence intervals. CV standard "
+        "deviations summarize validation-fold scores. Compare total cost and "
+        "defaults caught with approve-everyone and reject-everyone baselines. "
+        "Results are uncertain when the test set has few defaults."
     )
     st.dataframe(pd.read_csv(ROOT / "reports" / "model_comparison.csv"), width="stretch")
+    st.subheader("Cost sensitivity by false-negative:false-positive ratio")
+    st.caption(
+        "Each model's threshold is chosen using development-set out-of-fold "
+        "scores, then evaluated on the held-out test set."
+    )
+    st.dataframe(
+        pd.read_csv(ROOT / "reports" / "cost_ratio_comparison.csv"),
+        width="stretch",
+    )
     st.image(str(ROOT / "reports" / "evaluation.png"))
     st.subheader("Default rate by risk tier")
     st.image(str(ROOT / "reports" / "risk_tiers.png"))
